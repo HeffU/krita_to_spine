@@ -46,7 +46,7 @@ class SpineExportDialog(QDialog):
         self.directorySelectorLayout = QHBoxLayout()
         self.directoryTextField = QLineEdit()
         self.directoryDialogButton = QPushButton("...")
-        self.directoryDialogButton.clicked.connect(self._selectDir)
+        self.directoryDialogButton.clicked.connect(self.selectDir)
         
         # Option checkboxes
         self.optionsLayout = QVBoxLayout()
@@ -127,6 +127,7 @@ class SpineExportDialog(QDialog):
         self.activateWindow()
     
     def groupSlotCheckBox_StateChanged(self):
+        # Toggle state of dependent boxes
         if self.groupSlotCheckBox.isChecked():
             self.skinSuffixCheckBox.setEnabled(True)
         else:
@@ -136,6 +137,7 @@ class SpineExportDialog(QDialog):
             self.skinSortCheckBox.setChecked(False)
             
     def skinSuffixCheckBox_StateChanged(self):
+        # Toggle state of dependent boxes
         if self.skinSuffixCheckBox.isChecked():
             self.skinSortCheckBox.setEnabled(True)
         else:
@@ -144,7 +146,6 @@ class SpineExportDialog(QDialog):
     
     def refreshDocuments(self):
         self.widgetDocuments.clear()
-
         self.documentsList = [document for document in self.kritaInstance.documents() if document.fileName()]
         for document in self.documentsList:
             self.widgetDocuments.addItem(document.fileName())    
@@ -175,11 +176,11 @@ class SpineExportDialog(QDialog):
             if e.errno != errno.EEXIST:
                 raise
         
-    def _selectDir(self):
+    def selectDir(self):
         directory = QFileDialog.getExistingDirectory(self, "Select a folder", os.path.expanduser("~"), QFileDialog.ShowDirsOnly)
         self.directoryTextField.setText(directory)
         
-    def export(self):
+    def export(self, document):
         # Basic structure
         data = {
             'bones': [{'name': 'root'}],
@@ -190,8 +191,52 @@ class SpineExportDialog(QDialog):
         slots = data['slots']
         attachments = data['skins']['default']
         
+        # Set up Krita
+        Application.setBatchmode(self.batchmodeCheckBox.isChecked())
+        documentName = document.fileName() if document.fileName() else 'Untitled'
+        fileName, extension = str(documentName).rsplit('/', maxsplit=1)[-1].split('.', maxsplit=1)
+        
+        # Set up directories
+        self.createDir('/' + fileName)
+        if self.subdirectoryCheckBox.isChecked():
+            fileName += '/images'
+            self.createDir('/' + fileName)
+        
+        # Recursively process and export layers
+        self._exportLayers(document.rootNode(), self.formatsComboBox.currentText(), '/' + fileName)
         
         
+        # Reset Krita
+        Application.setBatchmode(True)
         
+        
+    def _exportLayers(self, parentNode, fileFormat, parentDir):
+        for node in parentNode.childNodes():
+            newDir = ''
+            # Handle filter layers
+            if self.ignoreFilterLayersCheckBox.isChecked() and 'filter' in node.type():
+                continue
+            # Handle invisible layers
+            elif self.ignoreInvisibleLayersCheckBox.isChecked() and not node.visible():
+                continue
+            # Handle Group layers
+            if node.type() == 'grouplayer':
+                if self.groupdirectoriesCheckBox.isChecked():
+                    newDir = parentDir + '/' + node.name()
+                    self.createDir(newDir)
+                else:
+                    newDir = parentDir
+            # Handle normal layers
+            else:
+                nodeName = node.name()
+                _fileFormat = self.formatsComboBox.currentText()
+                bounds = node.bounds()
+                
+                layerFileName = '{0}{1}/{2}.{3}'.format(self.directoryTextField.text(), parentDir, node.name(), _fileFormat)
+                teste = node.save(layerFileName, bounds.width(), bounds.height())
+
+            # Recursively handle child layers
+            if node.childNodes():
+                self._exportLayers(node, fileFormat, newDir)
         
         
