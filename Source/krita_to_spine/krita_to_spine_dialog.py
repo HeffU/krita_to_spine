@@ -181,6 +181,8 @@ class SpineExportDialog(QDialog):
         self.directoryTextField.setText(directory)
         
     def export(self, document):
+        self.currentDocument = document
+    
         # Basic structure
         data = {
             'bones': [{'name': 'root'}],
@@ -188,23 +190,27 @@ class SpineExportDialog(QDialog):
             'skins': {'default': {}},
             'animations': {}
         }
-        slots = data['slots']
-        attachments = data['skins']['default']
+        self.slots = data['slots']
+        self.attachments = data['skins']['default']
         
         # Set up Krita
         Application.setBatchmode(self.batchmodeCheckBox.isChecked())
         documentName = document.fileName() if document.fileName() else 'Untitled'
         fileName, extension = str(documentName).rsplit('/', maxsplit=1)[-1].split('.', maxsplit=1)
         
+        imageDir = fileName
         # Set up directories
         self.createDir('/' + fileName)
         if self.subdirectoryCheckBox.isChecked():
-            fileName += '/images'
-            self.createDir('/' + fileName)
+            imageDir += '/images'
+            self.createDir('/' + imageDir)
         
         # Recursively process and export layers
-        self._exportLayers(document.rootNode(), self.formatsComboBox.currentText(), '/' + fileName)
+        self._exportLayers(document.rootNode(), self.formatsComboBox.currentText(), '/' + imageDir)
         
+        # Export resulting json to spine file
+        with open(os.path.join(self.directoryTextField.text(), fileName, '%s.json' % fileName), 'w') as json_file:
+            json.dump(data, json_file)
         
         # Reset Krita
         Application.setBatchmode(True)
@@ -234,6 +240,21 @@ class SpineExportDialog(QDialog):
                 
                 layerFileName = '{0}{1}/{2}.{3}'.format(self.directoryTextField.text(), parentDir, node.name(), _fileFormat)
                 teste = node.save(layerFileName, bounds.width(), bounds.height())
+                
+                self.slots.insert(0, {
+                    'name': nodeName,
+                    'bone': 'root',
+                    'attachment': nodeName,
+                })
+                
+                self.attachments[nodeName] = {nodeName: {
+                    'x': bounds.center().x(),
+                    # Spine uses bottom left as origin rather than top left, so we convert
+                    'y': self.currentDocument.height() - bounds.center().y(),
+                    'rotation': 0,
+                    'width': bounds.width(),
+                    'height': bounds.height(),
+                }}
 
             # Recursively handle child layers
             if node.childNodes():
