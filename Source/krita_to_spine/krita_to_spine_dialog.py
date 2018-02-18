@@ -185,6 +185,7 @@ class SpineExportDialog(QDialog):
     
         # Basic structure
         data = {
+            'skeleton': {},
             'bones': [{'name': 'root'}],
             'slots': [],
             'skins': {'default': {}},
@@ -204,13 +205,14 @@ class SpineExportDialog(QDialog):
         if self.subdirectoryCheckBox.isChecked():
             imageDir += '/images'
             self.createDir('/' + imageDir)
+            data['skeleton']['images'] = './images/'
         
         # Recursively process and export layers
         self._exportLayers(document.rootNode(), self.formatsComboBox.currentText(), '/' + imageDir)
         
         # Export resulting json to spine file
         with open(os.path.join(self.directoryTextField.text(), fileName, '%s.json' % fileName), 'w') as json_file:
-            json.dump(data, json_file)
+            json.dump(data, json_file, indent=4, separators=(',', ': '))
         
         # Reset Krita
         Application.setBatchmode(True)
