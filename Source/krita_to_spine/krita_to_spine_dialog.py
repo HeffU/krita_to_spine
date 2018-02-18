@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (QDialog, QFormLayout, QListWidget, QHBoxLayout,
                              QDialogButtonBox, QVBoxLayout, QFrame,
                              QPushButton, QAbstractScrollArea, QLineEdit,
                              QMessageBox, QFileDialog, QCheckBox, QSpinBox,
-                             QComboBox)
+                             QComboBox, QLabel)
 
 import os
 import errno
@@ -59,13 +59,9 @@ class SpineExportDialog(QDialog):
         self.subdirectoryCheckBox = QCheckBox("Use sub directory for images")
         self.subdirectoryCheckBox.setChecked(True)
         self.groupdirectoriesCheckBox = QCheckBox("Create sub directories for group layers")
-        self.groupSlotCheckBox = QCheckBox("Use the same slot for all attachments in a group layer")
-        self.groupSlotCheckBox.setChecked(True)
-        self.groupSlotCheckBox.stateChanged.connect(self.groupSlotCheckBox_StateChanged)
-        self.skinSuffixCheckBox = QCheckBox("Create skin slots for group layers")
-        self.skinSuffixCheckBox.stateChanged.connect(self.skinSuffixCheckBox_StateChanged)
-        self.skinSortCheckBox = QCheckBox("Create skins based on layer name tags: layerName[skinName]")
-        self.skinSortCheckBox.setEnabled(False)
+        self.groupSlotCheckBox = QCheckBox("Treat Group Layers as skin slots. (Child layers must belong to unique skins)")
+        # Help text for skin option
+        self.skinHelpLine = QLabel()
         
         # Format box
         self.formatsComboBox = QComboBox()
@@ -88,8 +84,8 @@ class SpineExportDialog(QDialog):
         self.optionsLayout.addWidget(self.subdirectoryCheckBox)
         self.optionsLayout.addWidget(self.groupdirectoriesCheckBox)
         self.optionsLayout.addWidget(self.groupSlotCheckBox)
-        self.optionsLayout.addWidget(self.skinSuffixCheckBox)
-        self.optionsLayout.addWidget(self.skinSortCheckBox)
+        
+        self.skinHelpLine.setText("      Tag layers with skin names: layerName (skinName) | No tag = default skin")
         
         # Format box
         self.formatsComboBox.addItem("jpeg")
@@ -100,6 +96,7 @@ class SpineExportDialog(QDialog):
         
         self.lowerFormLayout.addRow('Base directory', self.directorySelectorLayout)
         self.lowerFormLayout.addRow('Export options', self.optionsLayout)
+        self.lowerFormLayout.addRow(' ', self.skinHelpLine)
         self.lowerFormLayout.addRow('Extensions', self.formatsComboBox)
         
         # Separator after documents
@@ -125,24 +122,6 @@ class SpineExportDialog(QDialog):
         self.setSizeGripEnabled(True)
         self.show()
         self.activateWindow()
-    
-    def groupSlotCheckBox_StateChanged(self):
-        # Toggle state of dependent boxes
-        if self.groupSlotCheckBox.isChecked():
-            self.skinSuffixCheckBox.setEnabled(True)
-        else:
-            self.skinSuffixCheckBox.setEnabled(False)
-            self.skinSuffixCheckBox.setChecked(False)
-            self.skinSortCheckBox.setEnabled(False)
-            self.skinSortCheckBox.setChecked(False)
-            
-    def skinSuffixCheckBox_StateChanged(self):
-        # Toggle state of dependent boxes
-        if self.skinSuffixCheckBox.isChecked():
-            self.skinSortCheckBox.setEnabled(True)
-        else:
-            self.skinSortCheckBox.setEnabled(False)
-            self.skinSortCheckBox.setChecked(False)
     
     def refreshDocuments(self):
         self.widgetDocuments.clear()
@@ -192,7 +171,7 @@ class SpineExportDialog(QDialog):
             'animations': {}
         }
         self.slots = data['slots']
-        self.attachments = data['skins']['default']
+        self.attachments = data['skins']
         
         # Set up Krita
         Application.setBatchmode(self.batchmodeCheckBox.isChecked())
@@ -221,11 +200,15 @@ class SpineExportDialog(QDialog):
     def _exportLayers(self, parentNode, fileFormat, parentDir):
         for node in parentNode.childNodes():
             newDir = ''
+            nodeName = node.name()
             # Handle filter layers
             if self.ignoreFilterLayersCheckBox.isChecked() and 'filter' in node.type():
                 continue
             # Handle invisible layers
             elif self.ignoreInvisibleLayersCheckBox.isChecked() and not node.visible():
+                continue
+            # Ignore krita's selection layer
+            elif nodeName == 'selection':
                 continue
             # Handle Group layers
             if node.type() == 'grouplayer':
@@ -234,22 +217,23 @@ class SpineExportDialog(QDialog):
                     self.createDir(newDir)
                 else:
                     newDir = parentDir
+                # Create a slot for the whole group, with no setup attachment
+                if self.groupSlotCheckBox.isChecked():
+                    self.slots.insert(0, {
+                        'name': nodeName,
+                        'bone': 'root',
+                        'attachment': nodeName,
+                    })
             # Handle normal layers
             else:
-                nodeName = node.name()
                 _fileFormat = self.formatsComboBox.currentText()
                 bounds = node.bounds()
                 
                 layerFileName = '{0}{1}/{2}.{3}'.format(self.directoryTextField.text(), parentDir, node.name(), _fileFormat)
-                teste = node.save(layerFileName, bounds.width(), bounds.height())
+                image = node.save(layerFileName, bounds.width(), bounds.height())
                 
-                self.slots.insert(0, {
-                    'name': nodeName,
-                    'bone': 'root',
-                    'attachment': nodeName,
-                })
-                
-                self.attachments[nodeName] = {nodeName: {
+                # Construct the attachment data
+                attachment = {nodeName: {
                     'x': bounds.center().x(),
                     # Spine uses bottom left as origin rather than top left, so we convert
                     'y': self.currentDocument.height() - bounds.center().y(),
@@ -257,6 +241,24 @@ class SpineExportDialog(QDialog):
                     'width': bounds.width(),
                     'height': bounds.height(),
                 }}
+                
+                # Handle children of group layers
+                if self.groupSlotCheckBox.isChecked() and parentNode.type() == 'grouplayer' and not parentNode.name() == 'root':
+                    skinName = 'default'
+                    a = nodeName.find('(')
+                    b = nodeName.find(')')
+                    if not a == -1 and b > a:
+                        skinName = nodeName[a+1:b]
+                    if not skinName in self.attachments:
+                        self.attachments[skinName] = {}
+                    self.attachments[skinName][parentNode.name()] = attachment
+                else:
+                    self.slots.insert(0, {
+                        'name': nodeName,
+                        'bone': 'root',
+                        'attachment': nodeName,
+                    })
+                    self.attachments['default'][nodeName] = attachment
 
             # Recursively handle child layers
             if node.childNodes():
